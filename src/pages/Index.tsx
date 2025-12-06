@@ -70,7 +70,7 @@ const Index = () => {
         setCreateMessage({ type: "success", text: `Room created! Code: ${data.room_code}. Redirecting...` });
         toast.success("Room created successfully!");
         setTimeout(() => {
-          window.location.href = `room.html?code=${data.room_code}`;
+          window.location.href = `/room?code=${data.room_code}`;
         }, 1500);
       } else {
         setCreateMessage({ type: "error", text: `Failed to create room: ${data.detail || "Unknown error"}` });
@@ -150,7 +150,7 @@ const Index = () => {
         setJoinMessage({ type: "success", text: "Joining room..." });
         toast.success("Joining room!");
         setTimeout(() => {
-          window.location.href = `room.html?code=${roomCode.toUpperCase()}`;
+          window.location.href = `/room?code=${roomCode.toUpperCase()}`;
         }, 800);
       } else {
         if (data.detail?.error === "ROOM_FULL") {
