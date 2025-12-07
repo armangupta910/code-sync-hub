@@ -6,8 +6,8 @@ import { toast } from "sonner";
 import RoomHeader from "@/components/room/RoomHeader";
 import OutputPanel from "@/components/room/OutputPanel";
 
-const API_BASE = "https://code-sync-render.onrender.com";
-const WS_BASE = "ws://code-sync-render.onrender.com/";
+const API_BASE = "http://localhost:8000";
+const WS_BASE = "ws://localhost:8000";
 
 type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
@@ -51,7 +51,15 @@ const Room = () => {
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof Monaco | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+
+  // Marks when we programmatically change the model to avoid echoing edits back to the server
   const isLocalChangeRef = useRef(false);
+  // Decorations being applied -- not used to block cursor events, only to help with timing when necessary
+  const isApplyingDecorationsRef = useRef(false);
+
+  const manualDisconnectRef = useRef(false);
+
+
   const reconnectAttemptsRef = useRef(0);
   const remoteDecorationsRef = useRef<Record<string, RemoteDecoration>>({});
   const remoteCursorColorsRef = useRef<Record<string, string>>({});
@@ -85,32 +93,38 @@ const Room = () => {
   const removeRemoteCursor = useCallback((remoteClientId: string) => {
     const decorations = remoteDecorationsRef.current[remoteClientId];
     if (decorations && editorRef.current) {
-      if (decorations.ids.length > 0) {
-        editorRef.current.deltaDecorations(decorations.ids, []);
-      }
-      if (decorations.widget) {
-        editorRef.current.removeContentWidget(decorations.widget);
+      try {
+        if (decorations.ids.length > 0) {
+          editorRef.current.deltaDecorations(decorations.ids, []);
+        }
+        if (decorations.widget) {
+          editorRef.current.removeContentWidget(decorations.widget);
+        }
+      } catch (e) {
+        // ignore when editor disposed
       }
       delete remoteDecorationsRef.current[remoteClientId];
     }
   }, []);
 
+  // --- IMPORTANT: Clean cursor rendering without disabling any listeners ---
   const updateRemoteCursor = useCallback(
-    (remoteClientId: string, position: CursorPosition, selection: Selection | null) => {
-      if (!position || remoteClientId === clientId || !editorRef.current || !monacoRef.current) return;
+    (remoteClientId: string, position: CursorPosition | null, selection: Selection | null) => {
+      if (!editorRef.current || !monacoRef.current) return;
+      if (remoteClientId === clientId) return; // ignore our own
 
-      const monaco = monacoRef.current;
       const editor = editorRef.current;
+      const monaco = monacoRef.current;
+
       const color = getColorForUser(remoteClientId);
       const displayName = getUserDisplayName(remoteClientId);
 
+      // Build decorations for selection highlight (if any)
       const decorations: Monaco.editor.IModelDeltaDecoration[] = [];
-
-      if (
-        selection &&
-        (selection.startLineNumber !== selection.endLineNumber ||
-          selection.startColumn !== selection.endColumn)
-      ) {
+      if (selection && (
+        selection.startLineNumber !== selection.endLineNumber ||
+        selection.startColumn !== selection.endColumn
+      )) {
         decorations.push({
           range: new monaco.Range(
             selection.startLineNumber,
@@ -130,52 +144,89 @@ const Room = () => {
         remoteDecorationsRef.current[remoteClientId] = { ids: [], widget: null };
       }
 
-      remoteDecorationsRef.current[remoteClientId].ids = editor.deltaDecorations(
-        remoteDecorationsRef.current[remoteClientId].ids || [],
-        decorations
-      );
-
-      if (remoteDecorationsRef.current[remoteClientId].widget) {
-        editor.removeContentWidget(remoteDecorationsRef.current[remoteClientId].widget!);
+      // Apply selection decorations via deltaDecorations only (fast & doesn't move caret)
+      try {
+        remoteDecorationsRef.current[remoteClientId].ids = editor.deltaDecorations(
+          remoteDecorationsRef.current[remoteClientId].ids || [],
+          decorations
+        );
+      } catch (e) {
+        // ignore
       }
 
-      const cursorWidget: Monaco.editor.IContentWidget = {
-        getId: () => `remote-cursor-${remoteClientId}`,
-        getDomNode: () => {
-          const node = document.createElement("div");
-          node.style.background = color;
-          node.style.width = "2px";
-          node.style.height = "20px";
-          node.style.position = "relative";
-          node.className = "remote-cursor";
+      // Remove old widget (if any)
+      if (remoteDecorationsRef.current[remoteClientId].widget) {
+        try {
+          editor.removeContentWidget(remoteDecorationsRef.current[remoteClientId].widget!);
+        } catch (e) {}
+        remoteDecorationsRef.current[remoteClientId].widget = null;
+      }
 
-          const label = document.createElement("div");
-          label.className = "remote-cursor-label";
-          label.style.background = color;
-          label.textContent = displayName;
-          node.appendChild(label);
+      // If there is a cursor position, create a non-interactive content widget for the caret + label.
+      if (position) {
+        const idSafe = remoteClientId.replace(/[^a-zA-Z0-9]/g, "");
+        const widget: Monaco.editor.IContentWidget = {
+          getId: () => `remote-cursor-${idSafe}`,
+          getDomNode: () => {
+            const node = document.createElement("div");
+            node.style.pointerEvents = "none"; // critical: do not capture mouse/focus
+            node.className = "remote-cursor-wrapper";
 
-          return node;
-        },
-        getPosition: () => ({
-          position: {
-            lineNumber: position.lineNumber,
-            column: position.column,
+            const caret = document.createElement("div");
+            caret.className = "remote-caret";
+            caret.style.width = "2px";
+            caret.style.height = "20px";
+            caret.style.background = color;
+            caret.style.boxShadow = "0 0 0 1px rgba(0,0,0,0.12)";
+            caret.style.margin = "0";
+            caret.style.pointerEvents = "none";
+
+            const label = document.createElement("div");
+            label.className = "remote-cursor-label";
+            label.textContent = displayName;
+            label.style.background = color;
+            label.style.color = "white";
+            label.style.fontSize = "11px";
+            label.style.padding = "2px 6px";
+            label.style.borderRadius = "4px";
+            label.style.marginTop = "2px";
+            label.style.whiteSpace = "nowrap";
+            label.style.pointerEvents = "none";
+
+            node.appendChild(caret);
+            node.appendChild(label);
+            return node;
           },
-          preference: [monaco.editor.ContentWidgetPositionPreference.EXACT],
-        }),
-      };
+          getPosition: () => ({
+            position: { lineNumber: position.lineNumber, column: position.column },
+            // prefer below/above to reduce collision with actual caret rendering
+            preference: [
+              monaco.editor.ContentWidgetPositionPreference.BELOW,
+              monaco.editor.ContentWidgetPositionPreference.ABOVE,
+              monaco.editor.ContentWidgetPositionPreference.EXACT,
+            ],
+          }),
+        };
 
-      editor.addContentWidget(cursorWidget);
-      remoteDecorationsRef.current[remoteClientId].widget = cursorWidget;
+        try {
+          editor.addContentWidget(widget);
+          remoteDecorationsRef.current[remoteClientId].widget = widget;
+        } catch (e) {
+          // ignore
+        }
 
-      // Add dynamic style
-      const styleId = `cursor-style-${remoteClientId.replace(/[^a-zA-Z0-9]/g, "")}`;
-      if (!document.getElementById(styleId)) {
-        const style = document.createElement("style");
-        style.id = styleId;
-        style.textContent = `.remote-selection-inline { background-color: ${color}; opacity: 0.3; }`;
-        document.head.appendChild(style);
+        // Add per-user inline style (only once)
+        const styleId = `remote-style-${remoteClientId.replace(/[^a-zA-Z0-9]/g, "")}`;
+        if (!document.getElementById(styleId)) {
+          const style = document.createElement("style");
+          style.id = styleId;
+          style.textContent = `
+            .remote-selection-inline { background-color: ${color}; opacity: 0.25 !important; }
+            .remote-caret { }
+            .remote-cursor-label { transform: translateY(-100%); }
+          `;
+          document.head.appendChild(style);
+        }
       }
     },
     [clientId, getColorForUser]
@@ -185,8 +236,14 @@ const Room = () => {
     (message: Record<string, unknown>) => {
       switch (message.type) {
         case "STATE":
+          // initial full state — set model value without broadcasting an EDIT
           isLocalChangeRef.current = true;
           setCode((message.code as string) || "");
+          // if editor mounted, set model value directly to avoid selection resets via React control flow
+          if (editorRef.current) {
+            const m = editorRef.current.getModel();
+            if (m) m.setValue((message.code as string) || "");
+          }
           isLocalChangeRef.current = false;
           if (message.participants !== undefined) {
             setParticipantCount(message.participants as number);
@@ -194,14 +251,58 @@ const Room = () => {
           break;
 
         case "PATCH":
-          if (!isLocalChangeRef.current && message.code !== undefined) {
-            isLocalChangeRef.current = true;
-            const currentPosition = editorRef.current?.getPosition();
-            setCode(message.code as string);
-            if (currentPosition && editorRef.current) {
-              editorRef.current.setPosition(currentPosition);
+          // a remote edit happened
+          if ((message.clientId as string) === clientId) return;
+          if (message.code === undefined) return;
+
+          // Apply remote edit directly to model while preserving selection if possible
+          if (editorRef.current) {
+            const editor = editorRef.current;
+            const model = editor.getModel();
+            if (model) {
+              // preserve current selection/position (best-effort)
+              const prevSelection = editor.getSelection();
+              isLocalChangeRef.current = true;
+              try {
+                // replace whole model for simplicity (for robust collaboration you would use OT/CRDT)
+                model.pushEditOperations([], [
+                  {
+                    range: model.getFullModelRange(),
+                    text: message.code as string,
+                  },
+                ], () => null);
+
+                // restore selection if still valid
+                if (prevSelection) {
+                  // clamp values into new model range
+                  const lineCount = model.getLineCount();
+                  const clampLine = (l: number) => Math.min(Math.max(1, l), lineCount);
+                  const clampCol = (line: number, col: number) => Math.min(Math.max(1, col), model.getLineMaxColumn(line));
+
+                  const startLine = clampLine(prevSelection.startLineNumber);
+                  const endLine = clampLine(prevSelection.endLineNumber);
+                  const startCol = clampCol(startLine, prevSelection.startColumn);
+                  const endCol = clampCol(endLine, prevSelection.endColumn);
+
+                  editor.setSelection(new monacoRef.current!.Selection(startLine, startCol, endLine, endCol));
+                }
+              } catch (e) {
+                // fallback to setValue
+                try {
+                  model.setValue(message.code as string);
+                } catch (ee) {}
+              } finally {
+                // small timeout to allow Monaco internal updates
+                setTimeout(() => {
+                  isLocalChangeRef.current = false;
+                }, 0);
+              }
+            } else {
+              // model not ready — set React state (mount will sync)
+              setCode(message.code as string);
             }
-            isLocalChangeRef.current = false;
+          } else {
+            setCode(message.code as string);
           }
           break;
 
@@ -217,11 +318,23 @@ const Room = () => {
           break;
 
         case "CURSOR":
-          updateRemoteCursor(
-            message.clientId as string,
-            message.position as CursorPosition,
-            message.selection as Selection | null
-          );
+          if ((message.clientId as string) === clientId) return;
+
+          const original = message.position as CursorPosition;
+
+const fixedPosition = original
+  ? {
+      ...original,
+      lineNumber: original.lineNumber - 1,
+    }
+  : null;
+
+updateRemoteCursor(
+  message.clientId as string,
+  fixedPosition,
+  (message.selection as Selection) || null
+);
+
           break;
 
         case "ERROR":
@@ -229,7 +342,7 @@ const Room = () => {
           break;
       }
     },
-    [removeRemoteCursor, updateRemoteCursor]
+    [clientId, removeRemoteCursor, updateRemoteCursor]
   );
 
   const connectWebSocket = useCallback(() => {
@@ -265,14 +378,22 @@ const Room = () => {
     ws.onclose = () => {
       setConnectionStatus("disconnected");
 
+      if (manualDisconnectRef.current) {
+        // user intentionally left → no reconnection
+        return;
+      }
+
       if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
         reconnectAttemptsRef.current++;
-        toast.info(`Reconnecting... (${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS})`);
+        toast.info(
+          `Reconnecting... (${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS})`
+        );
         setTimeout(connectWebSocket, 2000 * reconnectAttemptsRef.current);
       } else {
         toast.error("Connection lost. Please refresh the page.");
       }
     };
+
   }, [roomCode, clientId, participantId, handleWebSocketMessage]);
 
   const loadRoomData = useCallback(async () => {
@@ -314,6 +435,16 @@ const Room = () => {
       if (wsRef.current) {
         wsRef.current.close();
       }
+      // cleanup decorations
+      if (editorRef.current) {
+        Object.keys(remoteDecorationsRef.current).forEach((id) => {
+          try {
+            const rd = remoteDecorationsRef.current[id];
+            if (rd.ids.length) editorRef.current!.deltaDecorations(rd.ids, []);
+            if (rd.widget) editorRef.current!.removeContentWidget(rd.widget);
+          } catch (e) {}
+        });
+      }
     };
   }, [roomCode, clientId, navigate, loadRoomData]);
 
@@ -322,49 +453,78 @@ const Room = () => {
     monacoRef.current = monaco;
 
     let changeTimeout: NodeJS.Timeout;
+    let cursorTimeout: NodeJS.Timeout;
+    let lastSentPositionRef = { line: 0, col: 0 };
+
+    // --- CONTENT CHANGE ---
     editor.onDidChangeModelContent(() => {
+      // If we are applying an incoming remote edit, don't broadcast it
       if (isLocalChangeRef.current) return;
 
       clearTimeout(changeTimeout);
       changeTimeout = setTimeout(() => {
-        const currentCode = editor.getValue();
-
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          const currentCode = editor.getValue();
+          wsRef.current.send(JSON.stringify({ type: "EDIT", code: currentCode, clientId }));
+          // update local React state so new mount/state consumers see it
+          setCode(currentCode);
+        }
+      }, 10);
+    });
+
+    // --- CURSOR CHANGE ---
+    const sendCursorPosition = () => {
+      if (!editorRef.current) return;
+
+      clearTimeout(cursorTimeout);
+      cursorTimeout = setTimeout(() => {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          const position = editor.getPosition();
+          const selection = editor.getSelection();
+
+          if (position) {
+            if (lastSentPositionRef.line === position.lineNumber && lastSentPositionRef.col === position.column) {
+              return; // nothing changed
+            }
+            lastSentPositionRef.line = position.lineNumber;
+            lastSentPositionRef.col = position.column;
+          }
+
           wsRef.current.send(
             JSON.stringify({
-              type: "EDIT",
-              code: currentCode,
-              clientId: clientId,
+              type: "CURSOR",
+              clientId,
+              position: position ? { lineNumber: position.lineNumber, column: position.column } : null,
+              selection: selection
+                ? {
+                    startLineNumber: selection.startLineNumber,
+                    startColumn: selection.startColumn,
+                    endLineNumber: selection.endLineNumber,
+                    endColumn: selection.endColumn,
+                  }
+                : null,
             })
           );
         }
-      }, 100);
-    });
+      }, 50);
+    };
 
     editor.onDidChangeCursorPosition(() => {
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        const position = editor.getPosition();
-        const selection = editor.getSelection();
-
-        wsRef.current.send(
-          JSON.stringify({
-            type: "CURSOR",
-            clientId: clientId,
-            position: position
-              ? { lineNumber: position.lineNumber, column: position.column }
-              : null,
-            selection: selection
-              ? {
-                  startLineNumber: selection.startLineNumber,
-                  startColumn: selection.startColumn,
-                  endLineNumber: selection.endLineNumber,
-                  endColumn: selection.endColumn,
-                }
-              : null,
-          })
-        );
-      }
+      // Always broadcast cursor changes (no enabling/disabling)
+      sendCursorPosition();
     });
+
+    editor.onDidChangeCursorSelection(() => {
+      // selection change -> also broadcast
+      sendCursorPosition();
+    });
+
+    // If we have initial code from state (setCode), apply it to the model to keep editor in-sync without resetting selection
+    if (code && editor.getModel() && editor.getModel()!.getValue() !== code) {
+      isLocalChangeRef.current = true;
+      editor.getModel()!.setValue(code);
+      setTimeout(() => (isLocalChangeRef.current = false), 0);
+    }
   };
 
   const handleRunCode = async () => {
@@ -376,17 +536,11 @@ const Room = () => {
       const response = await fetch(`${API_BASE}/rooms/${roomCode}/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          code: editorRef.current.getValue(),
-          language: "python",
-        }),
+        body: JSON.stringify({ code: editorRef.current.getValue(), language: "python" }),
       });
 
       const data = await response.json();
-      const result: OutputResult = {
-        ...data,
-        timestamp: new Date().toLocaleTimeString(),
-      };
+      const result: OutputResult = { ...data, timestamp: new Date().toLocaleTimeString() };
       setOutputs((prev) => [result, ...prev]);
     } catch {
       toast.error("Failed to run code");
@@ -398,22 +552,24 @@ const Room = () => {
   const handleLeaveRoom = async () => {
     if (!confirm("Are you sure you want to leave this room?")) return;
 
+    manualDisconnectRef.current = true; // ✅ signal intentional leave
+
     try {
       await fetch(`${API_BASE}/rooms/${roomCode}/leave`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ participant_id: participantId || clientId }),
       });
+    } catch {}
 
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
+    if (wsRef.current) wsRef.current.close();
 
-      navigate("/");
-    } catch {
-      navigate("/");
-    }
+    sessionStorage.removeItem("participantId");
+    sessionStorage.removeItem("clientId");
+
+    navigate("/");
   };
+
 
   const handleClearOutput = () => setOutputs([]);
 
@@ -430,20 +586,20 @@ const Room = () => {
       />
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Editor Section */}
         <div className="flex-1 flex flex-col border-r border-border">
           <div className="flex items-center justify-between px-4 py-3 bg-secondary border-b border-border">
             <span className="font-sans text-sm font-medium text-foreground">Code Editor</span>
-            <span className="px-3 py-1 rounded bg-muted text-xs font-mono text-primary uppercase">
-              {language}
-            </span>
+            <span className="px-3 py-1 rounded bg-muted text-xs font-mono text-primary uppercase">{language}</span>
           </div>
           <div className="flex-1">
             <Editor
               height="100%"
               language={language}
               value={code}
-              onChange={(value) => setCode(value || "")}
+              onChange={(value) => {
+                // keep React state in sync for cases where other UI parts read `code`
+                setCode(value || "");
+              }}
               onMount={handleEditorMount}
               theme="vs-dark"
               options={{
@@ -458,9 +614,15 @@ const Room = () => {
           </div>
         </div>
 
-        {/* Output Section */}
         <OutputPanel outputs={outputs} onClear={handleClearOutput} />
       </div>
+
+      {/* minimal styles for remote visuals */}
+      <style>{`
+        .remote-selection-inline { opacity: 0.25; }
+        .remote-cursor-wrapper { display: flex; align-items: flex-start; gap: 6px; }
+        .remote-cursor-label { transform: translateY(-100%); }
+      `}</style>
     </div>
   );
 };

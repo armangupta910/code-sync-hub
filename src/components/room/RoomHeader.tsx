@@ -47,9 +47,10 @@ const RoomHeader = ({
     <header className="flex items-center justify-between px-4 sm:px-6 py-3 bg-card border-b border-border shadow-card">
       <div className="flex items-center gap-4 sm:gap-6">
         {/* Room Code */}
-        <div className="px-4 py-2 rounded-lg bg-gradient-to-r from-primary to-accent text-primary-foreground font-mono text-sm sm:text-base font-semibold tracking-widest shadow-glow">
-          {roomCode}
-        </div>
+        <div className="px-4 py-2 rounded-lg bg-gradient-to-r text-black tracking-[0.10em] from-primary to-accent text-foreground font-serif text-l font-semibold tracking-tight shadow-glow">
+  {roomCode}
+</div>
+
 
         {/* Participants */}
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-secondary">
