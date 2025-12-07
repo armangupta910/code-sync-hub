@@ -8,6 +8,8 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
     port: 8080,
+    allowedHosts: true,        // ✅ allow ALL hosts
+    strictPort: false,         // (optional) don't fail if port is busy
   },
   plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
   resolve: {
