@@ -7,6 +7,7 @@ type ConnectionStatus = "connecting" | "connected" | "disconnected";
 interface RoomHeaderProps {
   roomCode: string;
   participantCount: number;
+  maxPaticipantCount: number;
   connectionStatus: ConnectionStatus;
   language: string;
   isRunning: boolean;
@@ -17,6 +18,7 @@ interface RoomHeaderProps {
 const RoomHeader = ({
   roomCode,
   participantCount,
+  maxPaticipantCount,
   connectionStatus,
   isRunning,
   onRunCode,
@@ -59,7 +61,7 @@ const RoomHeader = ({
             <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-success" />
           </span>
           <span className="text-sm font-sans text-secondary-foreground">
-            {participantCount}/2
+            {participantCount}/{maxPaticipantCount}
           </span>
         </div>
 

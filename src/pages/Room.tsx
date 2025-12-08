@@ -6,8 +6,8 @@ import { toast } from "sonner";
 import RoomHeader from "@/components/room/RoomHeader";
 import OutputPanel from "@/components/room/OutputPanel";
 
-const API_BASE = "https://code-sync-render.onrender.com";
-const WS_BASE = "wss://code-sync-render.onrender.com";
+const API_BASE = "http://localhost:8000";
+const WS_BASE = "ws://localhost:8000";
 
 type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
@@ -43,6 +43,7 @@ const Room = () => {
 
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
   const [participantCount, setParticipantCount] = useState(0);
+  const [maxParticipantCount, setMaxParticipantCount] = useState(0);
   const [language, setLanguage] = useState("python");
   const [isRunning, setIsRunning] = useState(false);
   const [outputs, setOutputs] = useState<OutputResult[]>([]);
@@ -349,6 +350,7 @@ updateRemoteCursor(
     if (!roomCode) return;
 
     setConnectionStatus("connecting");
+    toast.message("Trying to send the INIT message")
 
     const ws = new WebSocket(`${WS_BASE}/ws/rooms/${roomCode}`);
     wsRef.current = ws;
@@ -400,12 +402,14 @@ updateRemoteCursor(
     if (!roomCode) return;
 
     try {
+      toast.message("Trying to load room data...")
       const response = await fetch(`${API_BASE}/rooms/${roomCode}/status`);
       const data = await response.json();
 
       if (data.exists) {
         setLanguage(data.language);
         setParticipantCount(data.participants);
+        setMaxParticipantCount(data.max_participants);
         connectWebSocket();
       } else {
         toast.error("Room not found!");
@@ -578,6 +582,7 @@ updateRemoteCursor(
       <RoomHeader
         roomCode={roomCode || ""}
         participantCount={participantCount}
+        maxPaticipantCount={maxParticipantCount}
         connectionStatus={connectionStatus}
         language={language}
         isRunning={isRunning}

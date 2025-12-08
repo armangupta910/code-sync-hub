@@ -11,7 +11,7 @@ import LoadingSpinner from "@/components/LoadingSpinner";
 import LanguageSelect from "@/components/LanguageSelect";
 import { ArrowRight, Search, Sparkles } from "lucide-react";
 
-const API_BASE = "https://code-sync-render.onrender.com";
+const API_BASE = "http://localhost:8000";
 
 interface RoomStatus {
   exists: boolean;
@@ -56,7 +56,7 @@ const Index = () => {
     setCreateMessage(null);
 
     try {
-      const response = await fetch(`${API_BASE}/rooms`, {
+      const response = await fetch(`${API_BASE}/rooms/5`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ language, client_id: createEmail }),
