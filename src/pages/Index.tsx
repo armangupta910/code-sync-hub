@@ -11,7 +11,7 @@ import LoadingSpinner from "@/components/LoadingSpinner";
 import LanguageSelect from "@/components/LanguageSelect";
 import { ArrowRight, Search, Sparkles } from "lucide-react";
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "https://code-sync-render.onrender.com";
 
 interface RoomStatus {
   exists: boolean;

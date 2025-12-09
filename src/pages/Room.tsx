@@ -6,8 +6,8 @@ import { toast } from "sonner";
 import RoomHeader from "@/components/room/RoomHeader";
 import OutputPanel from "@/components/room/OutputPanel";
 
-const API_BASE = "http://localhost:8000";
-const WS_BASE = "ws://localhost:8000";
+const API_BASE = "https://code-sync-render.onrender.com0";
+const WS_BASE = "wss://code-sync-render.onrender.com";
 
 type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
