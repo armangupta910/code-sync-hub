@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import RoomHeader from "@/components/room/RoomHeader";
 import OutputPanel from "@/components/room/OutputPanel";
 
-const API_BASE = "https://code-sync-render.onrender.com0";
+const API_BASE = "https://code-sync-render.onrender.com";
 const WS_BASE = "wss://code-sync-render.onrender.com";
 
 type ConnectionStatus = "connecting" | "connected" | "disconnected";
@@ -425,6 +425,7 @@ const Room = () => {
     try {
       toast.message("Loading room data...")
       const response = await fetch(`${API_BASE}/rooms/${roomCode}/status`);
+      toast.message("Message rec - " + response as String)
       const data = await response.json();
 
       if (data.exists) {
