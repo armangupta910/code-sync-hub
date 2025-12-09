@@ -6,8 +6,8 @@ import { toast } from "sonner";
 import RoomHeader from "@/components/room/RoomHeader";
 import OutputPanel from "@/components/room/OutputPanel";
 
-const API_BASE = "https://code-sync-render.onrender.com";
-const WS_BASE = "wss://code-sync-render.onrender.com";
+const API_BASE = "http://localhost:8000";
+const WS_BASE = "ws://localhost:8000";
 
 type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
@@ -165,6 +165,7 @@ const Room = () => {
 
       // If there is a cursor position, create a non-interactive content widget for the caret + label.
       if (position) {
+        // toast.message("Position Found - " + position.lineNumber + " " + position.column)
         const idSafe = remoteClientId.replace(/[^a-zA-Z0-9]/g, "");
         const widget: Monaco.editor.IContentWidget = {
           getId: () => `remote-cursor-${idSafe}`,
@@ -199,18 +200,22 @@ const Room = () => {
             return node;
           },
           getPosition: () => ({
-            position: { lineNumber: position.lineNumber, column: position.column },
+            position: {
+              lineNumber: position.lineNumber,
+              column: position.column,
+            },
             // prefer below/above to reduce collision with actual caret rendering
             preference: [
-              monaco.editor.ContentWidgetPositionPreference.BELOW,
-              monaco.editor.ContentWidgetPositionPreference.ABOVE,
               monaco.editor.ContentWidgetPositionPreference.EXACT,
+              monaco.editor.ContentWidgetPositionPreference.ABOVE,
+              monaco.editor.ContentWidgetPositionPreference.BELOW,
             ],
           }),
         };
 
         try {
           editor.addContentWidget(widget);
+          editor.layoutContentWidget(widget);
           remoteDecorationsRef.current[remoteClientId].widget = widget;
         } catch (e) {
           // ignore
@@ -266,26 +271,42 @@ const Room = () => {
               isLocalChangeRef.current = true;
               try {
                 // replace whole model for simplicity (for robust collaboration you would use OT/CRDT)
-                model.pushEditOperations([], [
-                  {
-                    range: model.getFullModelRange(),
-                    text: message.code as string,
-                  },
-                ], () => null);
+                model.pushEditOperations(
+                  [],
+                  [
+                    {
+                      range: model.getFullModelRange(),
+                      text: message.code as string,
+                    },
+                  ],
+                  () => null
+                );
 
                 // restore selection if still valid
                 if (prevSelection) {
                   // clamp values into new model range
                   const lineCount = model.getLineCount();
-                  const clampLine = (l: number) => Math.min(Math.max(1, l), lineCount);
-                  const clampCol = (line: number, col: number) => Math.min(Math.max(1, col), model.getLineMaxColumn(line));
+                  const clampLine = (l: number) =>
+                    Math.min(Math.max(1, l), lineCount);
+                  const clampCol = (line: number, col: number) =>
+                    Math.min(Math.max(1, col), model.getLineMaxColumn(line));
 
                   const startLine = clampLine(prevSelection.startLineNumber);
                   const endLine = clampLine(prevSelection.endLineNumber);
-                  const startCol = clampCol(startLine, prevSelection.startColumn);
+                  const startCol = clampCol(
+                    startLine,
+                    prevSelection.startColumn
+                  );
                   const endCol = clampCol(endLine, prevSelection.endColumn);
 
-                  editor.setSelection(new monacoRef.current!.Selection(startLine, startCol, endLine, endCol));
+                  editor.setSelection(
+                    new monacoRef.current!.Selection(
+                      startLine,
+                      startCol,
+                      endLine,
+                      endCol
+                    )
+                  );
                 }
               } catch (e) {
                 // fallback to setValue
@@ -322,19 +343,19 @@ const Room = () => {
           if ((message.clientId as string) === clientId) return;
 
           const original = message.position as CursorPosition;
+          // toast.message(
+          //   "Cursor Position Received - " +
+          //     original.lineNumber +
+          //     original.column +
+          //     "from client " +
+          //     clientId
+          // );
 
-const fixedPosition = original
-  ? {
-      ...original,
-      lineNumber: original.lineNumber - 1,
-    }
-  : null;
-
-updateRemoteCursor(
-  message.clientId as string,
-  fixedPosition,
-  (message.selection as Selection) || null
-);
+          updateRemoteCursor(
+            message.clientId as string,
+            original,
+            (message.selection as Selection) || null
+          );
 
           break;
 
@@ -350,7 +371,7 @@ updateRemoteCursor(
     if (!roomCode) return;
 
     setConnectionStatus("connecting");
-    toast.message("Trying to send the INIT message")
+    // toast.message("Trying to send the INIT message")
 
     const ws = new WebSocket(`${WS_BASE}/ws/rooms/${roomCode}`);
     wsRef.current = ws;
@@ -402,7 +423,7 @@ updateRemoteCursor(
     if (!roomCode) return;
 
     try {
-      toast.message("Trying to load room data...")
+      toast.message("Loading room data...")
       const response = await fetch(`${API_BASE}/rooms/${roomCode}/status`);
       const data = await response.json();
 
@@ -473,7 +494,7 @@ updateRemoteCursor(
           // update local React state so new mount/state consumers see it
           setCode(currentCode);
         }
-      }, 10);
+      }, 100);
     });
 
     // --- CURSOR CHANGE ---
@@ -510,7 +531,7 @@ updateRemoteCursor(
             })
           );
         }
-      }, 50);
+      }, 10);
     };
 
     editor.onDidChangeCursorPosition(() => {
