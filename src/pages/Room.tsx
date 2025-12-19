@@ -6,8 +6,8 @@ import { toast } from "sonner";
 import RoomHeader from "@/components/room/RoomHeader";
 import OutputPanel from "@/components/room/OutputPanel";
 
-const API_BASE = "https://code-sync-render.onrender.com";
-const WS_BASE = "wss://code-sync-render.onrender.com";
+const API_BASE = "http://localhost:8000";
+const WS_BASE = "ws://localhost:8000";
 
 type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
@@ -37,6 +37,25 @@ interface RemoteDecoration {
 }
 
 const Room = () => {
+
+  const CODE_TEMPLATES: Record<string, string> = {
+    python: `def main():
+    print("Hello from Collaborative Editor!")
+
+if __name__ == "__main__":
+    main()
+`,
+
+    cpp: `#include <bits/stdc++.h>
+using namespace std;
+
+int main() {
+    cout << "Hello from Collaborative Editor!" << endl;
+    return 0;
+}
+`,
+  };
+
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const roomCode = searchParams.get("code");
@@ -47,7 +66,8 @@ const Room = () => {
   const [language, setLanguage] = useState("python");
   const [isRunning, setIsRunning] = useState(false);
   const [outputs, setOutputs] = useState<OutputResult[]>([]);
-  const [code, setCode] = useState("# Loading...");
+const [code, setCode] = useState("");
+
 
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof Monaco | null>(null);
@@ -237,6 +257,30 @@ const Room = () => {
     },
     [clientId, getColorForUser]
   );
+
+  useEffect(() => {
+  // Only set default code when editor is empty
+  if (code.trim() !== "") return;
+
+  if (language === "cpp") {
+    setCode(`#include <bits/stdc++.h>
+using namespace std;
+
+int main() {
+    cout << "Hello from Collaborative Editor!" << endl;
+    return 0;
+}
+`);
+  } else {
+    setCode(`def main():
+    print("Hello from Collaborative Editor!")
+
+if __name__ == "__main__":
+    main()
+`);
+  }
+}, [language]);
+
 
   const handleWebSocketMessage = useCallback(
     (message: Record<string, unknown>) => {
@@ -562,7 +606,7 @@ const Room = () => {
       const response = await fetch(`${API_BASE}/rooms/${roomCode}/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: editorRef.current.getValue(), language: "python" }),
+        body: JSON.stringify({ code: editorRef.current.getValue(), language: language}),
       });
 
       const data = await response.json();
